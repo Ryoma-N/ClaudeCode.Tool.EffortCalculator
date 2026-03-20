@@ -10,7 +10,7 @@ npm run build    # Type-check (tsc -b) then build to dist/
 npm run lint     # Run ESLint
 npm run preview  # Preview production build
 npm run electron # Build + launch as Electron desktop app
-npm run dist     # Build + package as Windows portable EXE → release/工数計算ツール.exe
+npm run dist     # Build + package as Windows portable EXE → release/EffortCalculator1.0.1.exe
 ```
 
 No test framework is configured.

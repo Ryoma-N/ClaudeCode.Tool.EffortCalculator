@@ -1,12 +1,14 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef } from 'react'
 import { format } from 'date-fns'
 import { Download } from 'lucide-react'
 import jsPDF from 'jspdf'
+import html2canvas from 'html2canvas'
 import { useAppStore } from '../stores/appStore'
 
 export default function MonthlyReportPage() {
   const now = new Date()
   const [yearMonth, setYearMonth] = useState(format(now, 'yyyy-MM'))
+  const pdfRef = useRef<HTMLDivElement>(null)
 
   const projects           = useAppStore(s => s.projects)
   const tasks              = useAppStore(s => s.tasks)
@@ -77,45 +79,31 @@ export default function MonthlyReportPage() {
     return proj.mmDays * proj.mdHours
   }, [projectFilter, projects])
 
-  const generatePdf = () => {
-    const doc  = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
-    const W    = 210
-    const m    = 15
-    const lh   = 6.5
-    let y      = m
-
-    const t = (str: string, x: number, size = 10, bold = false) => {
-      doc.setFontSize(size); doc.setFont('helvetica', bold ? 'bold' : 'normal')
-      doc.text(str, x, y)
-    }
-    const ln = (gap = lh) => { y += gap }
-    const hl = () => { doc.setDrawColor(200, 200, 200); doc.line(m, y, W - m, y); y += 3 }
-
-    t(`月次工数レポート  ${yearMonth}`, m, 16, true); ln(9)
-    if (projectFilter !== 'all') {
-      const proj = projects.find(p => p.id === projectFilter)
-      t(`プロジェクト: ${proj?.name ?? ''}`, m, 11); ln(7)
-    }
-    t(`合計工数: ${totalHours}h${mmHours ? `  /  ${(totalHours / mmHours).toFixed(2)}人月` : ''}`, m, 11); ln(4)
-    hl()
-
-    t('担当者別集計', m, 12, true); ln(7)
-    byAssignee.forEach(([name, h]) => { t(`  ${name}:  ${h}h`, m); ln() })
-    ln(2); hl()
-
-    t('工程別集計', m, 12, true); ln(7)
-    byProcess.forEach(([name, h]) => { t(`  ${name}:  ${h}h`, m); ln() })
-    ln(2); hl()
-
-    t('明細', m, 12, true); ln(7)
-    rows.forEach(r => {
-      if (y > 270) { doc.addPage(); y = m }
-      t(`${r.date}  ${r.projectName}  ${r.taskName}  ${r.processName}  ${r.assignee}  ${r.hours}h`, m, 9)
-      if (r.note) { ln(4.5); t(`    備考: ${r.note}`, m, 8); ln(4) }
-      else ln()
+  const generatePdf = async () => {
+    if (!pdfRef.current) return
+    const canvas = await html2canvas(pdfRef.current, {
+      scale: 2,
+      backgroundColor: '#ffffff',
+      useCORS: true,
+      logging: false,
     })
-
-    doc.save(`月次工数_${yearMonth}.pdf`)
+    const pdf   = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' })
+    const pdfW  = 210
+    const pdfH  = 297
+    const imgW  = pdfW
+    const imgH  = (canvas.height * pdfW) / canvas.width
+    const img   = canvas.toDataURL('image/png')
+    let remain  = imgH
+    let offset  = 0
+    let isFirst = true
+    while (remain > 0) {
+      if (!isFirst) pdf.addPage()
+      pdf.addImage(img, 'PNG', 0, -offset, imgW, imgH)
+      offset  += pdfH
+      remain  -= pdfH
+      isFirst  = false
+    }
+    pdf.save(`月次工数_${yearMonth}.pdf`)
   }
 
   const field = 'bg-surface-raised border border-edge rounded-lg px-3 py-2 text-sm text-ink focus:outline-none focus:border-brand'
@@ -253,6 +241,121 @@ export default function MonthlyReportPage() {
           </div>
         </>
       )}
+
+      {/* PDF用隠しレンダリング領域（html2canvas でキャプチャ） */}
+      <div style={{ position: 'fixed', left: '-9999px', top: 0, pointerEvents: 'none' }}>
+        <div
+          ref={pdfRef}
+          style={{
+            fontFamily: '"Meiryo", "Yu Gothic", "Hiragino Sans", sans-serif',
+            fontSize: 11,
+            color: '#1a1a1a',
+            backgroundColor: '#ffffff',
+            padding: '12mm 14mm',
+            width: '182mm',
+            boxSizing: 'border-box',
+            lineHeight: 1.6,
+          }}
+        >
+          {/* タイトル */}
+          <div style={{ borderBottom: '3px solid #4f46e5', paddingBottom: 8, marginBottom: 12 }}>
+            <div style={{ fontSize: 18, fontWeight: 700, color: '#3730a3', marginBottom: 4 }}>
+              月次工数レポート　{yearMonth}
+            </div>
+            {projectFilter !== 'all' && (
+              <div style={{ fontSize: 11, color: '#555' }}>
+                プロジェクト: {projects.find(p => p.id === projectFilter)?.name ?? ''}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: '#555', marginTop: 4 }}>
+              合計工数: {totalHours}h{mmHours ? `　/　${(totalHours / mmHours).toFixed(2)} 人月` : ''}
+            </div>
+          </div>
+
+          {/* 担当者別集計 */}
+          <div style={{ marginBottom: 6, fontWeight: 700, fontSize: 13, color: '#3730a3', borderBottom: '2px solid #4f46e5', paddingBottom: 2 }}>担当者別集計</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, marginBottom: 12 }}>
+            <thead>
+              <tr>
+                <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 8px', textAlign: 'left' }}>担当者</th>
+                <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 8px', textAlign: 'right' }}>時間</th>
+                {mmHours && <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 8px', textAlign: 'right' }}>人月</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {byAssignee.map(([name, h], i) => (
+                <tr key={name}>
+                  <td style={{ padding: '4px 8px', borderBottom: '1px solid #e0e7ff', background: i % 2 === 0 ? '#fff' : '#f5f3ff' }}>{name}</td>
+                  <td style={{ padding: '4px 8px', borderBottom: '1px solid #e0e7ff', textAlign: 'right', background: i % 2 === 0 ? '#fff' : '#f5f3ff' }}>{h}h</td>
+                  {mmHours && <td style={{ padding: '4px 8px', borderBottom: '1px solid #e0e7ff', textAlign: 'right', background: i % 2 === 0 ? '#fff' : '#f5f3ff' }}>{(h / mmHours).toFixed(2)}人月</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* 工程別集計 */}
+          <div style={{ marginBottom: 6, fontWeight: 700, fontSize: 13, color: '#3730a3', borderBottom: '2px solid #4f46e5', paddingBottom: 2 }}>工程別集計</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10, marginBottom: 12 }}>
+            <thead>
+              <tr>
+                <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 8px', textAlign: 'left' }}>工程</th>
+                <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 8px', textAlign: 'right' }}>時間</th>
+                {mmHours && <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 8px', textAlign: 'right' }}>人月</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {byProcess.map(([name, h], i) => (
+                <tr key={name}>
+                  <td style={{ padding: '4px 8px', borderBottom: '1px solid #e0e7ff', background: i % 2 === 0 ? '#fff' : '#f5f3ff' }}>{name}</td>
+                  <td style={{ padding: '4px 8px', borderBottom: '1px solid #e0e7ff', textAlign: 'right', background: i % 2 === 0 ? '#fff' : '#f5f3ff' }}>{h}h</td>
+                  {mmHours && <td style={{ padding: '4px 8px', borderBottom: '1px solid #e0e7ff', textAlign: 'right', background: i % 2 === 0 ? '#fff' : '#f5f3ff' }}>{(h / mmHours).toFixed(2)}人月</td>}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {/* 明細 */}
+          <div style={{ marginBottom: 6, fontWeight: 700, fontSize: 13, color: '#3730a3', borderBottom: '2px solid #4f46e5', paddingBottom: 2 }}>作業明細</div>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 9, marginBottom: 8 }}>
+            <thead>
+              <tr>
+                <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 6px', textAlign: 'left' }}>日付</th>
+                <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 6px', textAlign: 'left' }}>プロジェクト</th>
+                <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 6px', textAlign: 'left' }}>タスク</th>
+                <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 6px', textAlign: 'left' }}>工程</th>
+                <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 6px', textAlign: 'left' }}>担当者</th>
+                <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 6px', textAlign: 'right' }}>時間</th>
+                <th style={{ background: '#4f46e5', color: '#fff', padding: '4px 6px', textAlign: 'left' }}>備考</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={r.id}>
+                  <td style={{ padding: '3px 6px', borderBottom: '1px solid #e0e7ff', background: i % 2 === 0 ? '#fff' : '#f5f3ff', whiteSpace: 'nowrap' }}>{r.date}</td>
+                  <td style={{ padding: '3px 6px', borderBottom: '1px solid #e0e7ff', background: i % 2 === 0 ? '#fff' : '#f5f3ff', maxWidth: 80 }}>{r.projectName}</td>
+                  <td style={{ padding: '3px 6px', borderBottom: '1px solid #e0e7ff', background: i % 2 === 0 ? '#fff' : '#f5f3ff' }}>{r.taskName}</td>
+                  <td style={{ padding: '3px 6px', borderBottom: '1px solid #e0e7ff', background: i % 2 === 0 ? '#fff' : '#f5f3ff' }}>{r.processName}</td>
+                  <td style={{ padding: '3px 6px', borderBottom: '1px solid #e0e7ff', background: i % 2 === 0 ? '#fff' : '#f5f3ff' }}>{r.assignee}</td>
+                  <td style={{ padding: '3px 6px', borderBottom: '1px solid #e0e7ff', background: i % 2 === 0 ? '#fff' : '#f5f3ff', textAlign: 'right', whiteSpace: 'nowrap' }}>{r.hours}h</td>
+                  <td style={{ padding: '3px 6px', borderBottom: '1px solid #e0e7ff', background: i % 2 === 0 ? '#fff' : '#f5f3ff', color: '#666' }}>{r.note}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={5} style={{ padding: '4px 6px', fontWeight: 700, borderTop: '2px solid #4f46e5' }}>合計</td>
+                <td style={{ padding: '4px 6px', textAlign: 'right', fontWeight: 700, borderTop: '2px solid #4f46e5' }}>{totalHours}h</td>
+                <td style={{ borderTop: '2px solid #4f46e5' }} />
+              </tr>
+            </tfoot>
+          </table>
+
+          {/* フッター */}
+          <div style={{ marginTop: 12, paddingTop: 6, borderTop: '1px solid #ddd', fontSize: 9, color: '#999', textAlign: 'right' }}>
+            工数計算ツール　出力日時：{format(new Date(), 'yyyy年MM月dd日 HH:mm')}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
